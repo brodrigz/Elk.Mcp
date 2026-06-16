@@ -27,20 +27,29 @@ public sealed class ElasticsearchTools
         CancellationToken cancellationToken = default)
     {
         using var response = await _operations
-            .ListIndicesAsync(index_pattern, cancellationToken)
+            .ResolveIndicesAsync(index_pattern, cancellationToken)
             .ConfigureAwait(false);
 
-        var indices = response.RootElement.Deserialize<List<CatIndexResponse>>(JsonOptions)
-            ?? throw new ElasticsearchOperationException("Elasticsearch returned an invalid indices response.");
+        if (!response.RootElement.TryGetProperty("indices", out var indicesElement) ||
+            indicesElement.ValueKind is not JsonValueKind.Array)
+        {
+            throw new ElasticsearchOperationException(
+                "Elasticsearch returned an invalid resolve-index response.");
+        }
+
+        var indices = indicesElement.Deserialize<List<ResolvedIndexResponse>>(JsonOptions)
+            ?? throw new ElasticsearchOperationException(
+                "Elasticsearch returned an invalid resolve-index response.");
 
         return Content(
             $"Found {indices.Count} indices:",
             JsonSerializer.Serialize(
                 indices.Select(item => new
                 {
-                    index = item.Index,
-                    status = item.Status,
-                    doc_count = item.DocCount
+                    index = item.Name,
+                    attributes = item.Attributes,
+                    aliases = item.Aliases,
+                    data_stream = item.DataStream
                 }),
                 JsonOptions));
     }
@@ -238,14 +247,14 @@ public sealed class ElasticsearchTools
         new TextContent(json)
     ];
 
-    private sealed class CatIndexResponse
+    private sealed class ResolvedIndexResponse
     {
-        public string Index { get; set; } = string.Empty;
-        public string Status { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public string[] Attributes { get; set; } = [];
+        public string[] Aliases { get; set; } = [];
 
-        [JsonPropertyName("docs.count")]
-        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
-        public ulong DocCount { get; set; }
+        [JsonPropertyName("data_stream")]
+        public string? DataStream { get; set; }
     }
 
     private sealed class CatShardResponse

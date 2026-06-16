@@ -31,15 +31,24 @@ public sealed class ElasticsearchToolsTests
     }
 
     [Fact]
-    public async Task List_indices_preserves_original_output_field_names()
+    public async Task List_indices_returns_resolved_index_metadata()
     {
         var operations = new StubOperations
         {
-            ListIndicesResponse =
+            ResolveIndicesResponse =
                 """
-                [
-                  { "index": "sales", "status": "open", "docs.count": "42" }
-                ]
+                {
+                  "indices": [
+                    {
+                      "name": "sales",
+                      "attributes": ["open"],
+                      "aliases": ["sales-current"],
+                      "data_stream": null
+                    }
+                  ],
+                  "aliases": [],
+                  "data_streams": []
+                }
                 """
         };
 
@@ -51,9 +60,10 @@ public sealed class ElasticsearchToolsTests
             item => Assert.Equal("Found 1 indices:", Text(item)),
             item =>
             {
-                Assert.Contains("\"doc_count\":42", Text(item));
-                Assert.DoesNotContain("\"docCount\"", Text(item));
-                Assert.DoesNotContain("\"docs.count\"", Text(item));
+                Assert.Contains("\"index\":\"sales\"", Text(item));
+                Assert.Contains("\"attributes\":[\"open\"]", Text(item));
+                Assert.Contains("\"aliases\":[\"sales-current\"]", Text(item));
+                Assert.Contains("\"data_stream\":null", Text(item));
             });
     }
 
@@ -244,17 +254,28 @@ public sealed class ElasticsearchToolsTests
         public string EsqlResponse { get; set; } =
             """{"columns":[],"values":[]}""";
 
-        public string ListIndicesResponse { get; set; } = "[]";
+        public string ResolveIndicesResponse { get; set; } =
+            """{"indices":[],"aliases":[],"data_streams":[]}""";
 
         public string MappingsResponse { get; set; } =
             """{"index":{"mappings":{"properties":{}}}}""";
 
         public JsonElement? LastSearchBody { get; private set; }
 
-        public Task<JsonDocument> ListIndicesAsync(
+        public Task<JsonDocument> ResolveIndicesAsync(
             string indexPattern,
             CancellationToken cancellationToken = default) =>
-            Task.FromResult(JsonDocument.Parse(ListIndicesResponse));
+            Task.FromResult(JsonDocument.Parse(ResolveIndicesResponse));
+
+        public Task<JsonDocument> GetAliasesAsync(
+            string indexPattern,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(JsonDocument.Parse("{}"));
+
+        public Task<JsonDocument> GetCatIndicesAsync(
+            string indexPattern,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(JsonDocument.Parse("[]"));
 
         public Task<JsonDocument> GetMappingsAsync(
             string index,
