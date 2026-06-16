@@ -1,6 +1,7 @@
 using System.Collections.Specialized;
 using System.Text.Json;
 using Elasticsearch.Net;
+using Elasticsearch.Net.Specification.CatApi;
 using Nest;
 using ElasticsearchHttpMethod = Elasticsearch.Net.HttpMethod;
 
@@ -58,13 +59,38 @@ public sealed class NestElasticsearchOperations : IElasticsearchOperations
         return new NestElasticsearchOperations(new ElasticClient(settings).LowLevel);
     }
 
-    public Task<JsonDocument> ListIndicesAsync(
+    public Task<JsonDocument> ResolveIndicesAsync(
         string indexPattern,
         CancellationToken cancellationToken = default) =>
         SendAsync(
             ElasticsearchHttpMethod.GET,
-            $"/_cat/indices/{EscapePathSegment(indexPattern)}?h=index,status,docs.count&format=json",
+            $"/_resolve/index/{EscapePathSegment(indexPattern)}",
             null,
+            null,
+            cancellationToken);
+
+    public Task<JsonDocument> GetAliasesAsync(
+        string indexPattern,
+        CancellationToken cancellationToken = default) =>
+        SendAsync(
+            ElasticsearchHttpMethod.GET,
+            $"/{EscapePathSegment(indexPattern)}/_alias",
+            null,
+            null,
+            cancellationToken);
+
+    public Task<JsonDocument> GetCatIndicesAsync(
+        string indexPattern,
+        CancellationToken cancellationToken = default) =>
+        SendAsync(
+            ElasticsearchHttpMethod.GET,
+            $"/_cat/indices/{EscapePathSegment(indexPattern)}",
+            null,
+            new CatIndicesRequestParameters
+            {
+                Headers = ["index", "status", "docs.count"],
+                Format = "json"
+            },
             cancellationToken);
 
     public Task<JsonDocument> GetMappingsAsync(
@@ -73,6 +99,7 @@ public sealed class NestElasticsearchOperations : IElasticsearchOperations
         SendAsync(
             ElasticsearchHttpMethod.GET,
             $"/{EscapePathSegment(index)}/_mapping",
+            null,
             null,
             cancellationToken);
 
@@ -84,6 +111,7 @@ public sealed class NestElasticsearchOperations : IElasticsearchOperations
             ElasticsearchHttpMethod.POST,
             $"/{EscapePathSegment(index)}/_search",
             PostData.String(queryBody.GetRawText()),
+            null,
             cancellationToken);
 
     public Task<JsonDocument> EsqlAsync(
@@ -93,6 +121,7 @@ public sealed class NestElasticsearchOperations : IElasticsearchOperations
             ElasticsearchHttpMethod.POST,
             "/_query",
             PostData.String(JsonSerializer.Serialize(new { query })),
+            null,
             cancellationToken);
 
     public Task<JsonDocument> GetShardsAsync(
@@ -105,8 +134,13 @@ public sealed class NestElasticsearchOperations : IElasticsearchOperations
 
         return SendAsync(
             ElasticsearchHttpMethod.GET,
-            $"/_cat/shards{indexPath}?h=index,shard,prirep,state,docs,store,node&format=json",
+            $"/_cat/shards{indexPath}",
             null,
+            new CatShardsRequestParameters
+            {
+                Headers = ["index", "shard", "prirep", "state", "docs", "store", "node"],
+                Format = "json"
+            },
             cancellationToken);
     }
 
@@ -114,6 +148,7 @@ public sealed class NestElasticsearchOperations : IElasticsearchOperations
         ElasticsearchHttpMethod method,
         string path,
         PostData? postData,
+        IRequestParameters? requestParameters,
         CancellationToken cancellationToken)
     {
         StringResponse response;
@@ -124,19 +159,22 @@ public sealed class NestElasticsearchOperations : IElasticsearchOperations
                 method,
                 path,
                 cancellationToken,
-                postData).ConfigureAwait(false);
+                postData,
+                requestParameters).ConfigureAwait(false);
         }
         catch (Exception exception)
         {
             throw new ElasticsearchOperationException(
-                "The Elasticsearch request could not be completed.",
+                $"The Elasticsearch request could not be completed: {exception.Message}",
                 exception);
         }
 
         if (!response.Success)
         {
+            var responseDetail = FormatErrorDetail(response.Body);
             throw new ElasticsearchOperationException(
-                $"Elasticsearch returned HTTP status {response.HttpStatusCode?.ToString() ?? "unknown"}.");
+                $"Elasticsearch returned HTTP status " +
+                $"{response.HttpStatusCode?.ToString() ?? "unknown"}{responseDetail}.");
         }
 
         try
@@ -161,5 +199,23 @@ public sealed class NestElasticsearchOperations : IElasticsearchOperations
         return Uri.EscapeDataString(value)
             .Replace("%2A", "*", StringComparison.OrdinalIgnoreCase)
             .Replace("%2C", ",", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string FormatErrorDetail(string? responseBody)
+    {
+        if (string.IsNullOrWhiteSpace(responseBody))
+        {
+            return string.Empty;
+        }
+
+        const int maxLength = 2000;
+        var detail = responseBody.Trim();
+
+        if (detail.Length > maxLength)
+        {
+            detail = $"{detail[..maxLength]}...";
+        }
+
+        return $": {detail}";
     }
 }
